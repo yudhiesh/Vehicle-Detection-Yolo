@@ -28,7 +28,7 @@ void drawPred(int classId, float conf, int left, int top, int right, int bottom,
 
 
 int main() {
-    VideoCapture cap("/Users/yudhiesh/Downloads/VehicleFrame.mp4");
+    VideoCapture cap("/Users/yudhiesh/Downloads/video1.mp4");
     int frame_width = cap.get(CAP_PROP_FRAME_WIDTH);
     int frame_height = cap.get(CAP_PROP_FRAME_HEIGHT);
     int fps = cap.get(CAP_PROP_FPS) / 5;
@@ -48,7 +48,7 @@ int main() {
         compute(frame);
         video.write(frame);
         imshow("frame", frame);
-        char c = (char)waitKey(10);
+        char c = (char)waitKey(30);
         if (c == 27)
             break;
     }
@@ -61,14 +61,15 @@ void compute(Mat frame) {
     Mat toProcess = frame.clone();
     medianBlur(toProcess, toProcess, 3);
 
-    Ptr<StaticSaliencyFineGrained> salFG = StaticSaliencyFineGrained::create();
+//    Ptr<StaticSaliencyFineGrained> salFG = StaticSaliencyFineGrained::create();
+    Ptr<StaticSaliencySpectralResidual> specR = StaticSaliencySpectralResidual::create();
     Mat mapSR, mapFG;
 
-    salFG->computeSaliency(toProcess, mapFG);
+    specR->computeSaliency(toProcess, mapFG);
     mapFG.convertTo(mapFG, CV_8U, 255);
 
     cvtColor(mapFG, mapFG, COLOR_GRAY2BGR);
-    vector<Mat> croppedImages = segment(KMeans(mapFG, 5), frame);
+    vector<Mat> croppedImages = segment(KMeans(mapFG, 3), frame);
 
     for (Mat img : croppedImages) {
         classifyImage(img);
@@ -124,7 +125,7 @@ vector<Mat> segment(Mat src, Mat ori) {
     vector<Vec4i> hierarchy;
     vector<Mat> croppedImg;
 
-    threshold(src, src, 0, 255, THRESH_BINARY | THRESH_OTSU);
+    //threshold(src, src, 0, 255, THRESH_BINARY | THRESH_OTSU);
 
     int erosion_size = 5;
     erode(src, src,
@@ -168,13 +169,15 @@ void classifyImage(Mat frame) {
     // Initialize the parameters
 //    float confThreshold = 0.5; // Confidence threshold
 //    float nmsThreshold = 0.4;  // Non-maximum suppression threshold
-    int inpWidth = 416;        // Width of network's input image
-    int inpHeight = 416;       // Height of network's input image
-
+    int inpWidth = 608;        // Width of network's input image
+    int inpHeight = 608;       // Height of network's input image
+    // 608 gives more accurate results
+    
     // Load names of classes
-    string classesFile = "coco.names";
+    string classesFile = "/Users/yudhiesh/darknet/data/coco.names";
     ifstream ifs(classesFile.c_str());
     string line;
+    
 
     while (getline(ifs, line)) classes.push_back(line);
 
@@ -186,13 +189,14 @@ void classifyImage(Mat frame) {
     Net net = readNetFromDarknet(modelConfiguration, modelWeights);
     net.setPreferableBackend(DNN_BACKEND_OPENCV);
     net.setPreferableTarget(DNN_TARGET_CPU);
+    
 
-    // Open the image file
-    string str = "Test.jpg";
-    //std::ifstream ifile(str);
-    //if (!ifile) throw("error");
-    str.replace(str.end() - 4, str.end(), "_yolo_out.jpg");
-    string outputFile = str;
+//    // Open the image file
+//    string str = "Test.jpg";
+//    //std::ifstream ifile(str);
+//    //if (!ifile) throw("error");
+//    str.replace(str.end() - 4, str.end(), "_yolo_out.jpg");
+//    string outputFile = str;
 
     // Create a 4D blob from a frame.
     Mat blob;
@@ -229,14 +233,16 @@ vector<String> getOutputsNames(const Net& net)
     return names;
 }
 
-void postprocess(Mat& frame, const std::vector<Mat>& outs)
+// Remove the bounding boxes with low confidence using non-maxima suppression
+void postprocess(Mat& frame, const vector<Mat>& outs)
 {
+    
+    float confThreshold = 0.5; // Confidence threshold
+    float nmsThreshold = 0.4; // non-maximal supression
     vector<int> classIds;
     vector<float> confidences;
     vector<Rect> boxes;
-    float confThreshold = 0.5;
-    float nmsThreshold = 0.4;
-
+    
     for (size_t i = 0; i < outs.size(); ++i)
     {
         // Scan through all the bounding boxes output from the network and keep only the
@@ -258,45 +264,45 @@ void postprocess(Mat& frame, const std::vector<Mat>& outs)
                 int height = (int)(data[3] * frame.rows);
                 int left = centerX - width / 2;
                 int top = centerY - height / 2;
-
+                
                 classIds.push_back(classIdPoint.x);
                 confidences.push_back((float)confidence);
                 boxes.push_back(Rect(left, top, width, height));
             }
         }
     }
-
+    
     // Perform non maximum suppression to eliminate redundant overlapping boxes with
     // lower confidences
     vector<int> indices;
-    dnn::NMSBoxes(boxes, confidences, confThreshold, nmsThreshold, indices);
+    NMSBoxes(boxes, confidences, confThreshold, nmsThreshold, indices);
     for (size_t i = 0; i < indices.size(); ++i)
     {
         int idx = indices[i];
         Rect box = boxes[idx];
         drawPred(classIds[idx], confidences[idx], box.x, box.y,
-            box.x + box.width, box.y + box.height, frame);
+                 box.x + box.width, box.y + box.height, frame);
     }
 }
+
 
 // Draw the predicted bounding box
 void drawPred(int classId, float conf, int left, int top, int right, int bottom, Mat& frame)
 {
     //Draw a rectangle displaying the bounding box
     rectangle(frame, Point(left, top), Point(right, bottom), Scalar(0, 0, 255));
-
+    
     //Get the label for the class name and its confidence
     string label = format("%.2f", conf);
     if (!classes.empty())
     {
         CV_Assert(classId < (int)classes.size());
         label = classes[classId] + ":" + label;
+        
     }
-
     //Display the label at the top of the bounding box
     int baseLine;
-    Size labelSize = getTextSize(label, FONT_HERSHEY_SIMPLEX, 1, 2, &baseLine);
+    Size labelSize = getTextSize(label, FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
     top = max(top, labelSize.height);
-    putText(frame, label, Point(left, top), FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255));
-    
+    putText(frame, label, Point(left, top), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255,255,255));
 }
